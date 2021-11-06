@@ -24,7 +24,7 @@ if __package__ is None:
 
 parser = argparse.ArgumentParser(description='Trains a CIFAR Classifier with OE',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-parser.add_argument('dataset', type=str, choices=['cifar10', 'cifar100'],
+parser.add_argument('--dataset', default='cifar10', type=str, choices=['cifar10', 'cifar100'],
                     help='Choose between CIFAR-10, CIFAR-100.')
 parser.add_argument('--model', '-m', type=str, default='allconv',
                     choices=['allconv', 'wrn'], help='Choose architecture.')
@@ -66,12 +66,12 @@ train_transform = trn.Compose([trn.RandomHorizontalFlip(), trn.RandomCrop(32, pa
 test_transform = trn.Compose([trn.ToTensor(), trn.Normalize(mean, std)])
 
 if args.dataset == 'cifar10':
-    train_data_in = dset.CIFAR10('/share/data/vision-greg/cifarpy', train=True, transform=train_transform)
-    test_data = dset.CIFAR10('/share/data/vision-greg/cifarpy', train=False, transform=test_transform)
+    train_data_in = dset.CIFAR10('/ssd1/haotao/datasets', train=True, transform=train_transform)
+    test_data = dset.CIFAR10('/ssd1/haotao/datasets', train=False, transform=test_transform)
     num_classes = 10
 else:
-    train_data_in = dset.CIFAR100('/share/data/vision-greg/cifarpy', train=True, transform=train_transform)
-    test_data = dset.CIFAR100('/share/data/vision-greg/cifarpy', train=False, transform=test_transform)
+    train_data_in = dset.CIFAR100('/ssd1/haotao/datasets', train=True, transform=train_transform)
+    test_data = dset.CIFAR100('/ssd1/haotao/datasets', train=False, transform=test_transform)
     num_classes = 100
 
 
@@ -157,7 +157,7 @@ def train():
 
     # start at a random point of the outlier dataset; this induces more randomness without obliterating locality
     train_loader_out.dataset.offset = np.random.randint(len(train_loader_out.dataset))
-    for in_set, out_set in zip(train_loader_in, train_loader_out):
+    for batch_idx, (in_set, out_set) in enumerate(zip(train_loader_in, train_loader_out)):
         data = torch.cat((in_set[0], out_set[0]), 0)
         target = in_set[1]
 
@@ -170,15 +170,19 @@ def train():
         scheduler.step()
         optimizer.zero_grad()
 
-        loss = F.cross_entropy(x[:len(in_set[0])], target)
+        in_loss = F.cross_entropy(x[:len(in_set[0])], target)
         # cross-entropy from softmax distribution to uniform distribution
-        loss += 0.5 * -(x[len(in_set[0]):].mean(1) - torch.logsumexp(x[len(in_set[0]):], dim=1)).mean()
+        ood_loss = -(x[len(in_set[0]):].mean(1) - torch.logsumexp(x[len(in_set[0]):], dim=1)).mean()
+        loss = in_loss + 0.5 * ood_loss
 
         loss.backward()
         optimizer.step()
 
         # exponential moving average
         loss_avg = loss_avg * 0.8 + float(loss) * 0.2
+
+        if batch_idx % 100 == 0:
+            print('batch %d (train): loss %.4f (%.4f, %.4f)' % (batch_idx, loss.item(), in_loss.item(), ood_loss.item()) )
 
     state['train_loss'] = loss_avg
 
